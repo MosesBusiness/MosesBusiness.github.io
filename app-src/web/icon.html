@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="fonts.css">
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style></head><body>
+<canvas id="c" width="1024" height="1024"></canvas>
+<script>
+function draw(maskable){
+  const cv=document.getElementById('c'), x=cv.getContext('2d'), S=1024, c=S/2;
+  x.clearRect(0,0,S,S);
+  // background: deep ink, rounded for "any", full bleed for maskable
+  const bg=x.createRadialGradient(c*0.8,c*0.7,40,c,c,S*0.75); bg.addColorStop(0,'#14292b'); bg.addColorStop(1,'#071012');
+  x.fillStyle=bg;
+  if(maskable){x.fillRect(0,0,S,S)} else {const r=220;x.beginPath();x.moveTo(r,0);x.arcTo(S,0,S,S,r);x.arcTo(S,S,0,S,r);x.arcTo(0,S,0,0,r);x.arcTo(0,0,S,0,r);x.fill()}
+  const scale = maskable ? 0.78 : 0.92;
+  const R=S*0.33*scale, petals=30, layers=22, amp=S*0.05*scale;
+  const g=x.createConicGradient(0.6,c,c); [['#63d8b0',0],['#e6c77e',.3],['#b9a3f0',.55],['#86cfe8',.8],['#63d8b0',1]].forEach(([k,o])=>g.addColorStop(o,k));
+  x.strokeStyle=g; x.lineWidth=1.6; x.globalAlpha=.85;
+  for(let L=0;L<layers;L++){const off=(L/layers)*Math.PI*2/petals, rr=R*(0.78+0.22*(L/layers)); x.beginPath();
+    for(let i=0;i<=1440;i++){const th=i/1440*Math.PI*2; const r=rr+amp*Math.sin(petals*th+off*petals)+amp*.45*Math.sin(petals/2*th+L*.21); const px=c+r*Math.cos(th), py=c+r*Math.sin(th); i?x.lineTo(px,py):x.moveTo(px,py)} x.stroke()}
+  x.globalAlpha=1;
+  // gold coin
+  const cr=S*0.2*scale; const cg=x.createRadialGradient(c-cr*.35,c-cr*.4,cr*.1,c,c,cr); cg.addColorStop(0,'#f6e3ad'); cg.addColorStop(.6,'#e6c77e'); cg.addColorStop(1,'#a8823a');
+  x.fillStyle=cg; x.beginPath(); x.arc(c,c,cr,0,Math.PI*2); x.fill();
+  x.strokeStyle='rgba(40,28,6,.45)'; x.lineWidth=S*0.006; x.setLineDash([S*0.012,S*0.01]); x.beginPath(); x.arc(c,c,cr*0.86,0,Math.PI*2); x.stroke(); x.setLineDash([]);
+  x.fillStyle='#1d1606'; x.font=`900 ${Math.round(cr*1.05)}px "Frank Ruhl Libre"`; x.textAlign='center'; x.textBaseline='middle'; x.fillText('₪',c,c+cr*0.04);
+}
+window.draw=draw;
+</script></body></html>
