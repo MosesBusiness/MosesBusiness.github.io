@@ -4,8 +4,9 @@ import { Rosette } from '../ui/Guilloche';
 import { Meta, createVault, newRecoveryCode, openWithPasscode, openWithRecovery, rewrap } from '../lib/crypto';
 import { Backend, clearFails, lockoutState, recordFail } from '../lib/store';
 import { fmtHebrewDate, fmtDay, todayISO } from '../lib/format';
+import { SyncCfg, parseRepo, syncMessage, SyncError } from '../lib/github';
 
-type Mode = 'intro' | 'pin' | 'confirm' | 'working' | 'recovery' | 'unlock' | 'opening' | 'forgot' | 'newpin' | 'newconfirm' | 'reset';
+type Mode = 'restore' | 'intro' | 'pin' | 'confirm' | 'working' | 'recovery' | 'unlock' | 'opening' | 'forgot' | 'newpin' | 'newconfirm' | 'reset';
 
 function useSize() {
   const [s, set] = useState(() => Math.min(window.innerWidth, 560));
@@ -27,10 +28,11 @@ function Pad({ onKey, okLabel = 'אישור' }: { onKey: (k: string) => void; ok
   );
 }
 
-export function Lock({ backend, meta, onOpen, onReset }: {
+export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
   backend: Backend; meta: Meta | null;
   onOpen: (dek: CryptoKey, fresh: boolean) => void;
   onReset: () => void;
+  onRestore?: (cfg: SyncCfg) => Promise<void>;
 }) {
   const size = useSize();
   const [mode, setMode] = useState<Mode>(meta ? 'unlock' : 'intro');
@@ -45,6 +47,7 @@ export function Lock({ backend, meta, onOpen, onReset }: {
   const [recInput, setRecInput] = useState('');
   const [recRaw, setRecRaw] = useState<Uint8Array | null>(null);
   const [resetText, setResetText] = useState('');
+  const [restoring, setRestoring] = useState(false);
   const [now, setNow] = useState(Date.now());
   const lock = lockoutState();
   const lockedFor = Math.max(0, lock.until - now);
@@ -149,6 +152,7 @@ export function Lock({ backend, meta, onOpen, onReset }: {
               ))}
             </div>
             <button className="btn primary block" onClick={() => setMode('pin')}>יצירת כספת</button>
+            {onRestore && <button className="btn quiet block" onClick={() => { setErr(''); setMode('restore'); }}><Icon name="refresh-cw" size={16} /> יש לי כבר כספת בענן: שחזור</button>}
           </div>
         )}
 
@@ -183,6 +187,28 @@ export function Lock({ backend, meta, onOpen, onReset }: {
               </div>
             )}
           </>
+        )}
+
+        {mode === 'restore' && onRestore && (
+          <form className="card stack" style={{ width: '100%' }} onSubmit={async e => {
+            e.preventDefault();
+            const f = new FormData(e.currentTarget);
+            const r = parseRepo(String(f.get('repo') || ''));
+            const token = String(f.get('token') || '').trim();
+            if (!r || !token) { setErr('צריך שם מאגר וטוקן'); return; }
+            setErr(''); setRestoring(true);
+            try { await onRestore({ ...r, token, on: true }); }
+            catch (x) { setErr(x instanceof SyncError ? (x.code === 'auth' ? 'הטוקן לא תקף. בדוק שהעתקת אותו במלואו, או צור טוקן חדש לאותו מאגר.' : syncMessage(x)) : 'לא נמצאה כספת במאגר הזה.'); }
+            finally { setRestoring(false); }
+          }}>
+            <div className="row"><span className="glyph gold"><Icon name="refresh-cw" /></span><b>שחזור הכספת מהענן</b></div>
+            <p className="ink2" style={{ margin: 0, fontSize: '.88rem' }}>המאגר הפרטי שלך ב-GitHub שומר עותק מוצפן של כל הנתונים. Chrome זוכר את הטוקן ויציע למלא אותו.</p>
+            <label className="field"><span>מאגר</span><input id="rs-repo" name="repo" className="input ltr" defaultValue="MosesBusiness/hon-shaket-data" autoComplete="username" spellCheck={false} /></label>
+            <label className="field"><span>טוקן</span><input id="rs-token" name="token" className="input ltr" type="password" autoComplete="current-password" spellCheck={false} /></label>
+            {err && <span className="down" role="alert" style={{ fontSize: '.86rem' }}>{err}</span>}
+            <button className="btn primary block" disabled={restoring}>{restoring ? 'מוריד…' : 'שחזור'}</button>
+            <button type="button" className="btn quiet sm" onClick={() => { setErr(''); setMode('intro'); }}>חזרה</button>
+          </form>
         )}
 
         {mode === 'working' && <div className="muted" role="status">יוצר מפתחות הצפנה…</div>}
@@ -231,7 +257,7 @@ export function Lock({ backend, meta, onOpen, onReset }: {
       </main>
 
       <footer className="muted" style={{ fontSize: '.74rem', textAlign: 'center', display: 'flex', gap: 6, alignItems: 'center' }}>
-        <Icon name="lock" size={13} /> הצפנת AES-256 · מפתח נגזר מהקוד שלך ({backend.kind === 'cloud' ? 'מסונכרן בחשבון Claude שלך' : 'נשמר רק במכשיר הזה'})
+        <Icon name="lock" size={13} /> הצפנת AES-256 · מפתח נגזר מהקוד שלך ({backend.kind === 'cloud' ? 'מסונכרן בחשבון Claude שלך' : 'הקוד לא נשמר בשום מקום'})
       </footer>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../state';
 import { Icon, Seg, Sheet, Switch } from '../ui/kit';
 import { useFmt } from '../ui/parts';
@@ -12,6 +12,7 @@ import { Meta, openWithPasscode, rewrap, newRecoveryCode } from '../lib/crypto';
 import { readFile, detect, extract, Mapping, Row, Parsed } from '../lib/importer';
 import { exportBackup, saveFile } from '../lib/backup';
 import { WEB } from '../lib/env';
+import { lastSyncAt, markSyncError, mirrored, onSyncStatus, parseRepo, reconcile, syncMessage, syncStatus, testRepo, uploadAll } from '../lib/github';
 import { guessCategory } from '../lib/merchants';
 
 // ---------- onboarding / profile ----------
@@ -509,6 +510,83 @@ export function ImportSheet() {
   );
 }
 
+// ---------- cloud copy (web app) ----------
+function CloudSection() {
+  const { v, setCore, io, toast, lock } = useApp();
+  const [st, setSt] = useState(syncStatus());
+  useEffect(() => onSyncStatus(setSt), []);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const sync = v.core.sync?.on ? v.core.sync : null;
+  const last = st.at || lastSyncAt();
+
+  async function connect(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const r = parseRepo(String(f.get('repo') || ''));
+    const token = String(f.get('token') || '').trim();
+    if (!r || !token) { setErr('צריך שם מאגר בצורה owner/name וטוקן.'); return; }
+    setBusy(true); setErr('');
+    try {
+      const cfg = { ...r, token, on: true };
+      await testRepo(cfg);
+      const mirror = await uploadAll(io.local, cfg);
+      io.setBackend(mirrored(io.local, mirror));
+      setCore(c => ({ ...c, sync: cfg }));
+      toast('הגיבוי לענן פעיל. מעכשיו כל שינוי נשמר גם שם');
+    } catch (x) { setErr(syncMessage(x)); } finally { setBusy(false); }
+  }
+  async function now() {
+    if (!sync) return;
+    setBusy(true); setErr('');
+    try {
+      const { mirror, changedLocal } = await reconcile(io.local, sync);
+      io.setBackend(mirrored(io.local, mirror));
+      if (changedLocal) { toast('נמצאו בענן נתונים חדשים יותר. טוען אותם…'); setTimeout(lock, 900); } else toast('מסונכרן');
+    } catch (x) { markSyncError(x); setErr(syncMessage(x)); } finally { setBusy(false); }
+  }
+
+  if (sync) {
+    return (
+      <div className="card flat tight stack" style={{ gap: 10 }}>
+        <div className="row"><span className={`glyph ${st.state === 'error' ? 'expense' : 'save'}`}><Icon name={st.state === 'error' ? 'circle-alert' : 'shield-check'} /></span>
+          <div className="grow" style={{ display: 'grid' }}>
+            <b>גיבוי אוטומטי לענן פעיל</b>
+            <span className="muted" style={{ fontSize: '.8rem' }}>{st.state === 'syncing' ? 'מסנכרן…' : st.state === 'error' ? st.msg : last ? `עודכן ${new Date(last).toLocaleString('he-IL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'מחובר'} · <span className="ltr">{sync.owner}/{sync.repo}</span></span>
+          </div>
+        </div>
+        <span className="ink2" style={{ fontSize: '.84rem' }}>כל שינוי נשמר מוצפן גם במאגר הפרטי שלך ב-GitHub. גם אם תנקה את הדפדפן או תחליף טלפון: במסך הפתיחה "יש לי כבר כספת בענן", ואז הקוד שלך.</span>
+        {err && <span className="down" role="alert" style={{ fontSize: '.84rem' }}>{err}</span>}
+        <div className="row">
+          <button className="btn ghost sm" onClick={() => void now()} disabled={busy}>{busy ? 'מסנכרן…' : 'סנכרון עכשיו'}</button>
+          <button className="btn quiet sm" onClick={() => { io.setBackend(null); setCore(c => ({ ...c, sync: undefined })); toast('הגיבוי לענן נותק'); }}>ניתוק</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <form className="card flat tight stack" style={{ gap: 10 }} onSubmit={e => void connect(e)}>
+      <div className="row"><span className="glyph gold"><Icon name="shield-check" /></span><b>גיבוי אוטומטי לענן</b></div>
+      <span className="ink2" style={{ fontSize: '.86rem' }}>כרגע הנתונים רק בטלפון, וניקוי של הדפדפן ימחק אותם. חבר מאגר פרטי ב-GitHub, וכל שינוי יישמר בו אוטומטית, מוצפן. GitHub רואה רק תווים מוצפנים.</span>
+      <ol style={{ margin: 0, paddingInlineStart: 18, display: 'grid', gap: 6, fontSize: '.86rem' }}>
+        <li><a href="https://github.com/new?name=hon-shaket-data&visibility=private" target="_blank" rel="noopener noreferrer">פתיחת מאגר פרטי בשם hon-shaket-data</a> (Private).</li>
+        <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">יצירת טוקן</a>, ובו:
+          <ul style={{ margin: '4px 0 0', paddingInlineStart: 16, display: 'grid', gap: 3 }}>
+            <li><bdi>Repository access</bdi>: לבחור <bdi>Only select repositories</bdi> ואת <bdi>hon-shaket-data</bdi></li>
+            <li><bdi>Permissions</bdi>: ליד <bdi>Contents</bdi> לבחור <bdi>Read and write</bdi></li>
+            <li><bdi>Expiration</bdi>: הכי ארוך שאפשר</li>
+          </ul>
+        </li>
+        <li>להדביק כאן את הטוקן. Chrome יציע לשמור אותו, כדאי לאשר.</li>
+      </ol>
+      <label className="field"><span>מאגר</span><input id="cl-repo" name="repo" className="input ltr" defaultValue={`${'MosesBusiness'}/hon-shaket-data`} autoComplete="username" spellCheck={false} /></label>
+      <label className="field"><span>טוקן</span><input id="cl-token" name="token" className="input ltr" type="password" autoComplete="current-password" spellCheck={false} placeholder="github_pat_…" /></label>
+      {err && <span className="down" role="alert" style={{ fontSize: '.84rem' }}>{err}</span>}
+      <button className="btn primary" disabled={busy}>{busy ? 'מחבר ומעלה…' : 'חיבור וגיבוי עכשיו'}</button>
+    </form>
+  );
+}
+
 // ---------- settings ----------
 export function SettingsSheet() {
   const { v, setCore, setVault, close, open, toast, lock, io } = useApp();
@@ -568,8 +646,15 @@ export function SettingsSheet() {
             </select></label>
           <button className="li" onClick={() => open({ k: 'security' })}><span className="glyph"><Icon name="key-round" /></span><span className="grow" style={{ display: 'grid' }}><span className="t">החלפת קוד וקוד שחזור</span><span className="s">AES-256-GCM · PBKDF2 עם 600,000 סבבים</span></span><Icon name="chevron-left" className="muted" /></button>
           <button className="li" onClick={lock}><span className="glyph"><Icon name="lock" /></span><span className="grow t">נעילה עכשיו</span></button>
-          <div className="banner"><Icon name="shield-check" size={16} /><span>{io.backend.kind === 'cloud' ? 'הנתונים מוצפנים במכשיר לפני שהם נשמרים באזור הפרטי שלך בחשבון Claude. מי שרואה את הקובץ המאוחסן רואה רק תווים מוצפנים.' : 'הנתונים מוצפנים ונשמרים רק בטלפון הזה, לא בשום שרת. שמור גיבוי מוצפן פעם בחודש, ולמעבר לטלפון חדש: גיבוי כאן ושחזור שם.'}</span></div>
+          <div className="banner"><Icon name="shield-check" size={16} /><span>{io.backend.kind === 'cloud' ? 'הנתונים מוצפנים במכשיר לפני שהם נשמרים באזור הפרטי שלך בחשבון Claude. מי שרואה את הקובץ המאוחסן רואה רק תווים מוצפנים.' : v.core.sync?.on ? 'הנתונים מוצפנים בטלפון, ועותק מוצפן נשמר אוטומטית במאגר הפרטי שלך ב-GitHub. ניקוי הדפדפן לא מוחק אותם.' : 'הנתונים מוצפנים ונשמרים רק בטלפון הזה, לא בשום שרת. שמור גיבוי מוצפן פעם בחודש, ולמעבר לטלפון חדש: גיבוי כאן ושחזור שם.'}</span></div>
         </section>
+
+        {WEB && (
+          <section className="stack">
+            <div className="eyebrow">גיבוי לענן</div>
+            <CloudSection />
+          </section>
+        )}
 
         <section className="stack">
           <div className="eyebrow">נתונים</div>

@@ -89,12 +89,12 @@ export function Home() {
         <button className="chip" onClick={() => open({ k: 'import' })}><Icon name="file-spreadsheet" size={16} /> ייבוא דף חשבון</button>
       </div>
 
-      {io.backend.kind === 'local' && allTx(v).length >= 15 && (!v.core.lastBackup || Date.now() - v.core.lastBackup > 30 * 86_400_000) && (
+      {io.backend.kind === 'local' && !v.core.sync?.on && allTx(v).length >= 15 && (!v.core.lastBackup || Date.now() - v.core.lastBackup > 30 * 86_400_000) && (
         <section className="card tight row" style={{ gap: 12 }} aria-label="גיבוי">
           <span className="glyph gold"><Icon name="download" /></span>
           <div className="grow" style={{ fontSize: '.88rem' }}>
             <b>{v.core.lastBackup ? 'עבר חודש מהגיבוי האחרון' : 'עוד לא שמרת גיבוי'}</b>
-            <div className="ink2">הנתונים שמורים רק בטלפון הזה. גיבוי מוצפן לוקח שנייה, ונפתח רק עם הקוד שלך.</div>
+            <div className="ink2">הנתונים שמורים רק בטלפון הזה. גיבוי מוצפן לוקח שנייה; גיבוי אוטומטי לענן מופעל בהגדרות.</div>
           </div>
           <button className="btn ghost sm" onClick={async () => {
             const r = await exportBackup(io);

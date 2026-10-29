@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 document.documentElement.lang = 'he';
@@ -18,6 +18,7 @@ import { Meta } from './lib/crypto';
 import { Vault, defaultCore } from './lib/model';
 import { fmtHebrewDate, greeting } from './lib/format';
 import { BASE, WEB } from './lib/env';
+import { SyncCfg, markSyncError, mirrored, onSyncStatus, pullAll, reconcile, syncStatus } from './lib/github';
 
 // Web app: offline support, installability, and storage the browser won't evict.
 if (WEB) {
@@ -36,6 +37,8 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 function Shell() {
   const { v, tab, setTab, panel, open, setCore, privacy, lock, syncError } = useApp();
   const [scrolled, setScrolled] = useState(false);
+  const [cloud, setCloud] = useState(syncStatus());
+  useEffect(() => onSyncStatus(setCloud), []);
   useEffect(() => {
     const f = () => setScrolled(window.scrollY > 4);
     window.addEventListener('scroll', f, { passive: true });
@@ -69,8 +72,8 @@ function Shell() {
         {lens === 'time' && v.core.profile.income > 0 && (
           <div className="pill gold" style={{ marginTop: 8 }}><Icon name="hourglass" size={12} /> עדשת הזמן: שעה מהזמן שלך שווה ₪{Math.round(v.core.profile.income / v.core.profile.hours)}</div>
         )}
-        {syncError && (
-          <div className="banner" style={{ marginTop: 8 }}><Icon name="info" size={16} /><span>{syncError}</span></div>
+        {(syncError || cloud.state === 'error') && (
+          <div className="banner" style={{ marginTop: 8 }}><Icon name="info" size={16} /><span>{syncError || cloud.msg}</span></div>
         )}
       </header>
 
@@ -124,10 +127,25 @@ function Root() {
   }, []);
   useEffect(() => { void boot(); }, [boot]);
 
+  const restored = useRef<SyncCfg | null>(null);
+
   const onOpen = useCallback(async (backend: Backend, dek: CryptoKey) => {
     try {
-      const docs = await backend.getAll();
-      const { vault, io } = await VaultIO.load(backend, dek, docs);
+      let { vault, io } = await VaultIO.load(backend, dek, await backend.getAll());
+      // Web app: bring the cloud copy and this device in step before opening.
+      const cfg = restored.current || (vault?.core.sync?.on ? vault.core.sync : null);
+      if (WEB && cfg) {
+        try {
+          const { mirror, changedLocal } = await reconcile(backend, cfg);
+          if (changedLocal) ({ vault, io } = await VaultIO.load(backend, dek, await backend.getAll()));
+          io.setBackend(mirrored(backend, mirror));
+          if (vault && restored.current && JSON.stringify(vault.core.sync) !== JSON.stringify(cfg)) {
+            vault = { ...vault, core: { ...vault.core, sync: cfg } };
+            io.saveCore(vault.core);
+          }
+        } catch (e) { markSyncError(e); }
+        restored.current = null;
+      }
       const v: Vault = vault || { core: defaultCore(), months: {} };
       if (!vault) io.saveCore(v.core);
       setPhase({ k: 'open', vault: v, io, backend });
@@ -160,7 +178,14 @@ function Root() {
     );
   }
   if (phase.k === 'lock') {
-    return <Lock backend={phase.backend} meta={phase.meta} onOpen={dek => void onOpen(phase.backend, dek)} onReset={() => { setPhase({ k: 'boot' }); void boot(); }} />;
+    const restore = WEB ? async (cfg: SyncCfg) => {
+      const { docs } = await pullAll(cfg);
+      if (!docs.meta) throw new Error('empty');
+      for (const [id, d] of Object.entries(docs)) await phase.backend.put(id, d);
+      restored.current = cfg;
+      setPhase({ k: 'lock', backend: phase.backend, meta: docs.meta as Meta });
+    } : undefined;
+    return <Lock key={phase.meta ? "has-meta" : "no-meta"} backend={phase.backend} meta={phase.meta} onOpen={dek => void onOpen(phase.backend, dek)} onReset={() => { setPhase({ k: 'boot' }); void boot(); }} onRestore={restore} />;
   }
   return (
     <AppProvider initial={phase.vault} io={phase.io} onLock={lock}>

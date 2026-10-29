@@ -98,7 +98,11 @@ export class VaultIO {
   onError: (e: any) => void = () => {};
   onIdle: () => void = () => {};
 
-  constructor(public backend: Backend, private dek: CryptoKey) {}
+  readonly local: Backend;
+  constructor(public backend: Backend, private dek: CryptoKey) { this.local = backend; }
+
+  /** Route writes through a wrapper (the cloud mirror), or back to the plain local backend. */
+  setBackend(b: Backend | null) { this.backend = b || this.local; }
 
   get busy() { return this.inflight.size > 0 || this.pending.size > 0; }
 

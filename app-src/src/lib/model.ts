@@ -102,6 +102,7 @@ export interface Core {
   createdAt: number;
   coachLog?: { q: string; a: string; at: number }[];
   lastBackup?: number;
+  sync?: { owner: string; repo: string; token: string; on: boolean }; // cloud copy in a private GitHub repo (web app)
 }
 
 export interface Vault {
