@@ -152,7 +152,7 @@ export function AppProvider({ initial, io, onLock, children }: { initial: Vault;
     if (tabRef.current === 'home') return false;
     setTabNow(tabHist.current.pop() || 'home');
     return true;
-  }, tab !== 'home');
+  }, tab === 'home' ? 0 : Math.max(1, tabHist.current.length));
 
   useEffect(() => { try { history.replaceState(history.state, '', tab === 'home' ? location.pathname + location.search : '#' + tab); } catch { /* sandboxed */ } }, [tab]);
 

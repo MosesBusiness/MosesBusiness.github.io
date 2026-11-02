@@ -148,16 +148,20 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
   }
 
   // The phone's back button: one step back on this screen.
+  const PREV: Partial<Record<Mode, Mode>> = { restore: 'intro', confirm: 'pin', forgot: 'unlock', reset: 'forgot', newpin: 'unlock', newconfirm: 'newpin' };
+  const prevOf = (m: Mode): Mode | undefined => (m === 'pin' && !meta ? 'intro' : PREV[m]);
+  const hold = ['bio', 'recovery', 'working', 'opening'].includes(mode);
+  let backSteps = hold ? 1 : 0;
+  for (let m = prevOf(mode); m && backSteps < 6; m = prevOf(m)) backSteps++;
   useBack(() => {
     if (mode === 'bio') { void finishBio(false); return true; }
-    if (['recovery', 'working', 'opening'].includes(mode)) return true;
+    if (hold) return true;
     if (mode === 'newpin' || mode === 'newconfirm') { recRaw?.fill(0); setRecRaw(null); }
-    const to: Partial<Record<Mode, Mode>> = { restore: 'intro', confirm: 'pin', forgot: 'unlock', reset: 'forgot', newpin: 'unlock', newconfirm: 'newpin' };
-    const next = mode === 'pin' && !meta ? 'intro' : to[mode];
+    const next = prevOf(mode);
     if (!next) return false;
     setMode(next); setErr(''); setCode(''); setFirst('');
     return true;
-  });
+  }, backSteps);
 
   async function useRecovery() {
     if (!meta) return;

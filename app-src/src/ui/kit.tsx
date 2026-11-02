@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { ICONS } from './iconData';
-import { useBack } from '../lib/back';
+import { closeWatchers, useBack } from '../lib/back';
 
 export function Icon({ name, size = 20, stroke = 1.8, className, label }: { name: string; size?: number; stroke?: number; className?: string; label?: string }) {
   return (
@@ -24,7 +24,8 @@ export function Sheet({ title, onClose, onBack, children, full, footer, labelled
   // Runs once per opening. Re-running on every render (onClose is often a new function)
   // moved focus off the field being typed in and closed the phone keyboard after each letter.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current(); };
+    // Escape closes the sheet; where CloseWatcher exists it already turns Escape into "back".
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !closeWatchers) closeRef.current(); };
     window.addEventListener('keydown', onKey);
     const prev = document.activeElement as HTMLElement | null;
     if (!ref.current?.contains(document.activeElement)) ref.current?.focus({ preventScroll: true });
