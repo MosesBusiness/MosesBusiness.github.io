@@ -28,7 +28,10 @@ export interface Meta {
   created: number;
   pass: { salt: string; iter: number; w: Wrapped };
   rec: { salt: string; iter: number; w: Wrapped };
+  /** Quick unlock (fingerprint / face): the key wrapped once more per passkey, see bio.ts. */
+  bio?: BioEntry[];
 }
+export interface BioEntry { id: string; salt: string; w: Wrapped; at: number }
 
 export async function deriveKEK(secret: string, salt: Uint8Array, iter: number): Promise<CryptoKey> {
   const base = await crypto.subtle.importKey('raw', enc.encode(secret.normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
@@ -54,7 +57,7 @@ async function unwrapRaw(w: Wrapped, kek: CryptoKey): Promise<Uint8Array> {
   return new Uint8Array(raw);
 }
 
-const importDEK = (raw: Uint8Array) =>
+export const importDEK = (raw: Uint8Array) =>
   crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 
 /** Crockford base32 recovery code: 20 symbols = 100 bits, shown as 4 groups of 5. */
@@ -69,7 +72,7 @@ export function normalizeRecovery(s: string): string {
 }
 
 /** Create a new vault key and the meta record that stores it wrapped twice. */
-export async function createVault(passcode: string, recovery: string): Promise<{ meta: Meta; dek: CryptoKey }> {
+export async function createVault(passcode: string, recovery: string): Promise<{ meta: Meta; dek: CryptoKey; raw: Uint8Array }> {
   const raw = rand(32);
   const ps = rand(16), rs = rand(16);
   const [kp, kr] = await Promise.all([
@@ -82,10 +85,19 @@ export async function createVault(passcode: string, recovery: string): Promise<{
     pass: { salt: b64(ps), iter: PASS_ITER, w: await wrapRaw(raw, kp) },
     rec: { salt: b64(rs), iter: REC_ITER, w: await wrapRaw(raw, kr) },
   };
-  const dek = await importDEK(raw);
-  raw.fill(0);
-  return { meta, dek };
+  return { meta, dek: await importDEK(raw), raw };
 }
+
+/** A wrapping key from a high-entropy device secret (the passkey's PRF output). */
+export async function kekFromSecret(secret: Uint8Array): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('hon-shaket/bio/v1'), info: enc.encode('dek-wrap') },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+  );
+}
+export const wrapKey = wrapRaw;
+export const unwrapKey = unwrapRaw;
 
 /** Throws when the passcode is wrong (AES-GCM authentication fails). */
 export async function openWithPasscode(meta: Meta, passcode: string): Promise<{ dek: CryptoKey; raw: Uint8Array }> {

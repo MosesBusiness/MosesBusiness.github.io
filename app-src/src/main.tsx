@@ -19,6 +19,7 @@ import { Vault, defaultCore } from './lib/model';
 import { fmtHebrewDate, greeting } from './lib/format';
 import { BASE, WEB } from './lib/env';
 import { SyncCfg, markSyncError, mirrored, onSyncStatus, pullAll, reconcile, syncStatus } from './lib/github';
+import { flash, startBack } from './lib/back';
 
 // Web app: offline support, installability, and storage the browser won't evict.
 if (WEB) {
@@ -194,4 +195,7 @@ function Root() {
   );
 }
 
+// Back button = one step back inside the app. Only the web app may be left with it (the Claude
+// version runs in a frame, where leaving shows an empty page).
+startBack({ canExit: WEB, onRoot: () => flash('לחיצה נוספת על חזור תצא מהאפליקציה') });
 createRoot(document.getElementById('root')!).render(<Root />);

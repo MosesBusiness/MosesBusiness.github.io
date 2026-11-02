@@ -5,6 +5,7 @@ import { Lens, todayISO, ymOf } from './lib/format';
 import { Feed, Track, watchFeed } from './lib/feed';
 import { postRecurring, wealth } from './lib/calc';
 import { guessCategory, merchantKey } from './lib/merchants';
+import { useBack } from './lib/back';
 
 export type Tab = 'home' | 'activity' | 'grow' | 'goals';
 export interface AddPreset { t?: Tx['t']; c?: string; a?: number; edit?: Tx; n?: string }
@@ -60,8 +61,10 @@ export function AppProvider({ initial, io, onLock, children }: { initial: Vault;
   const [v, setV] = useState<Vault>(initial);
   const prev = useRef<Vault>(initial);
   const remote = useRef(new Set<string>());
-  const [tab, setTab] = useState<Tab>(() => (['home', 'activity', 'grow', 'goals'].includes(location.hash.slice(1)) ? location.hash.slice(1) as Tab : 'home'));
-  const [panel, setPanel] = useState<Panel | null>(null);
+  const [tab, setTabNow] = useState<Tab>(() => (['home', 'activity', 'grow', 'goals'].includes(location.hash.slice(1)) ? location.hash.slice(1) as Tab : 'home'));
+  // Open sheets as a stack: closing one (or the back button) returns to the one beneath it.
+  const [stack, setStack] = useState<Panel[]>([]);
+  const panel = stack[stack.length - 1] || null;
   const [toastState, setToast] = useState<{ msg: string; undo?: () => void; id: number } | null>(null);
   const [feed, setFeed] = useState<Feed | null | undefined>(undefined);
   const [track, setTrack] = useState<Track | null | undefined>(undefined);
@@ -135,7 +138,23 @@ export function AppProvider({ initial, io, onLock, children }: { initial: Vault;
     return () => stop();
   }, []);
 
-  useEffect(() => { try { history.replaceState(null, '', tab === 'home' ? location.pathname + location.search : '#' + tab); } catch { /* sandboxed */ } }, [tab]);
+  // Tabs visited since the home tab, so back walks back through them.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const tabHist = useRef<Tab[]>([]);
+  const setTab = useCallback((t: Tab) => {
+    const cur = tabRef.current;
+    if (t === cur) return;
+    tabHist.current = t === 'home' ? [] : [...tabHist.current, cur].slice(-12);
+    setTabNow(t);
+  }, []);
+  useBack(() => {
+    if (tabRef.current === 'home') return false;
+    setTabNow(tabHist.current.pop() || 'home');
+    return true;
+  }, tab !== 'home');
+
+  useEffect(() => { try { history.replaceState(history.state, '', tab === 'home' ? location.pathname + location.search : '#' + tab); } catch { /* sandboxed */ } }, [tab]);
 
   // Theme.
   useEffect(() => {
@@ -198,7 +217,10 @@ export function AppProvider({ initial, io, onLock, children }: { initial: Vault;
 
   const ctx: Ctx = {
     v, setVault, setCore, addTx, saveTx, deleteTx, lens, privacy: v.core.settings.privacy,
-    feed, track, tab, setTab, panel, open: setPanel, close: useCallback(() => setPanel(null), []), toast, lock: onLock, io, syncError,
+    feed, track, tab, setTab, panel,
+    open: useCallback((p: Panel) => setStack(s => [...s.filter(x => x.k !== p.k), p]), []),
+    close: useCallback(() => setStack(s => s.slice(0, -1)), []),
+    toast, lock: onLock, io, syncError,
   };
 
   return (

@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon, haptic } from '../ui/kit';
 import { Rosette } from '../ui/Guilloche';
 import { Meta, createVault, newRecoveryCode, openWithPasscode, openWithRecovery, rewrap } from '../lib/crypto';
 import { Backend, clearFails, lockoutState, recordFail } from '../lib/store';
 import { fmtHebrewDate, fmtDay, todayISO } from '../lib/format';
 import { SyncCfg, parseRepo, syncMessage, SyncError } from '../lib/github';
+import { bioAvailable, bioHere, declineBio, enrollBio, openWithBio, shouldOfferBio } from '../lib/bio';
+import { useBack } from '../lib/back';
 
-type Mode = 'restore' | 'intro' | 'pin' | 'confirm' | 'working' | 'recovery' | 'unlock' | 'opening' | 'forgot' | 'newpin' | 'newconfirm' | 'reset';
+type Mode = 'bio' | 'restore' | 'intro' | 'pin' | 'confirm' | 'working' | 'recovery' | 'unlock' | 'opening' | 'forgot' | 'newpin' | 'newconfirm' | 'reset';
 
 function useSize() {
   const [s, set] = useState(() => Math.min(window.innerWidth, 560));
@@ -43,7 +45,10 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
   const [shake, setShake] = useState(0);
   const [recovery, setRecovery] = useState('');
   const [saved, setSaved] = useState(false);
-  const [pending, setPending] = useState<{ dek: CryptoKey } | null>(null);
+  const [pending, setPending] = useState<{ dek: CryptoKey; raw: Uint8Array; meta: Meta } | null>(null);
+  const [bioOk, setBioOk] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
+  const autoBio = useRef(false);
   const [recInput, setRecInput] = useState('');
   const [recRaw, setRecRaw] = useState<Uint8Array | null>(null);
   const [resetText, setResetText] = useState('');
@@ -64,9 +69,9 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
       if (value !== first) { setMode('pin'); setFirst(''); return fail('הקודים לא תואמים. נסה שוב'); }
       setMode('working'); setErr('');
       const rec = newRecoveryCode();
-      const { meta: m, dek } = await createVault(value, rec);
+      const { meta: m, dek, raw } = await createVault(value, rec);
       await backend.put('meta', m as any);
-      setRecovery(rec); setPending({ dek }); setMode('recovery');
+      setRecovery(rec); setPending({ dek, raw, meta: m }); setMode('recovery');
     } else if (mode === 'newconfirm') {
       if (value !== first || !meta || !recRaw) { setMode('newpin'); setFirst(''); return fail('הקודים לא תואמים. נסה שוב'); }
       setMode('working');
@@ -82,8 +87,9 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
       setMode('opening'); setErr('');
       try {
         const { dek, raw } = await openWithPasscode(meta, value);
-        raw.fill(0);
         clearFails();
+        if (await shouldOfferBio(meta)) { setPending({ dek, raw, meta }); setMode('bio'); return; }
+        raw.fill(0);
         setTimeout(() => onOpen(dek, false), 650);
       } catch {
         const s = recordFail();
@@ -100,6 +106,58 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
     else if (k === 'ok') void submit();
     else setCode(c => (c.length < 32 ? c + k : c));
   }
+
+  // Fingerprint / face: offered once after a passcode unlock, then used on every opening.
+  useEffect(() => { if (meta?.bio?.length) void bioAvailable().then(setBioOk); }, [meta]);
+  async function tryBio() {
+    if (!meta || lockedFor > 0) return;
+    setMode('opening'); setErr('');
+    try {
+      const { dek, raw } = await openWithBio(meta);
+      raw.fill(0);
+      clearFails();
+      setTimeout(() => onOpen(dek, false), 450);
+    } catch (e: any) {
+      setMode('unlock');
+      if (e?.code !== 'cancel') setErr('הכניסה המהירה לא הצליחה. הקלד את הקוד');
+    }
+  }
+  useEffect(() => {
+    if (mode === 'unlock' && bioOk && bioHere(meta) && !autoBio.current && !document.hidden) { autoBio.current = true; void tryBio(); }
+  }, [mode, bioOk]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function finishBio(enable: boolean) {
+    if (!pending) return;
+    const { dek, raw, meta: m } = pending;
+    if (enable) {
+      setBioBusy(true); setErr('');
+      try {
+        const next = await enrollBio(m, raw);
+        await backend.put('meta', next as any);
+      } catch (e: any) {
+        setBioBusy(false);
+        if (e?.code === 'cancel') return;
+        declineBio();
+        setErr('הטלפון הזה לא תומך בכניסה מהירה דרך הדפדפן. הקוד ממשיך לעבוד כרגיל.');
+        return;
+      }
+    } else declineBio();
+    raw.fill(0);
+    setPending(null); setMode('opening');
+    setTimeout(() => onOpen(dek, false), 450);
+  }
+
+  // The phone's back button: one step back on this screen.
+  useBack(() => {
+    if (mode === 'bio') { void finishBio(false); return true; }
+    if (['recovery', 'working', 'opening'].includes(mode)) return true;
+    if (mode === 'newpin' || mode === 'newconfirm') { recRaw?.fill(0); setRecRaw(null); }
+    const to: Partial<Record<Mode, Mode>> = { restore: 'intro', confirm: 'pin', forgot: 'unlock', reset: 'forgot', newpin: 'unlock', newconfirm: 'newpin' };
+    const next = mode === 'pin' && !meta ? 'intro' : to[mode];
+    if (!next) return false;
+    setMode(next); setErr(''); setCode(''); setFirst('');
+    return true;
+  });
 
   async function useRecovery() {
     if (!meta) return;
@@ -186,6 +244,11 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
                 {mode === 'unlock' && <button className="btn quiet sm" onClick={() => { setMode('forgot'); setErr(''); }}>שכחתי את הקוד</button>}
               </div>
             )}
+            {mode === 'unlock' && bioOk && (
+              <button className="btn ghost" id="bio-btn" onClick={() => void tryBio()} disabled={lockedFor > 0}>
+                <Icon name="fingerprint" size={20} /> טביעת אצבע / זיהוי פנים
+              </button>
+            )}
           </>
         )}
 
@@ -213,6 +276,21 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
 
         {mode === 'working' && <div className="muted" role="status">יוצר מפתחות הצפנה…</div>}
 
+        {mode === 'bio' && (
+          <div className="card stack" style={{ width: '100%', textAlign: 'center', justifyItems: 'center' }}>
+            <span className="glyph gold" style={{ width: 56, height: 56 }}><Icon name="fingerprint" size={30} /></span>
+            <b style={{ fontSize: '1.1rem' }}>כניסה מהירה</b>
+            <p className="ink2" style={{ margin: 0, fontSize: '.9rem' }}>מעכשיו נכנסים בטביעת אצבע או בזיהוי פנים, בלי להקליד קוד. הקוד ממשיך לעבוד תמיד.</p>
+            {err && <span className="down" role="alert" style={{ fontSize: '.86rem' }}>{err}</span>}
+            {err ? <button className="btn primary block" onClick={() => void finishBio(false)}>כניסה</button> : (
+              <>
+                <button className="btn primary block" id="bio-enable" disabled={bioBusy} onClick={() => void finishBio(true)}>{bioBusy ? 'מגדיר…' : 'הפעלה'}</button>
+                <button className="btn quiet sm" disabled={bioBusy} onClick={() => void finishBio(false)}>לא עכשיו</button>
+              </>
+            )}
+          </div>
+        )}
+
         {mode === 'recovery' && (
           <div className="card stack" style={{ width: '100%' }}>
             <div className="row"><span className="glyph gold"><Icon name="key-round" /></span><b style={{ fontSize: '1.08rem' }}>קוד השחזור שלך</b></div>
@@ -227,7 +305,12 @@ export function Lock({ backend, meta, onOpen, onReset, onRestore }: {
               <input type="checkbox" id="rec-saved" checked={saved} onChange={e => setSaved(e.target.checked)} style={{ width: 20, height: 20, accentColor: 'var(--accent)' }} />
               שמרתי את הקוד במקום בטוח
             </label>
-            <button className="btn primary block" disabled={!saved} onClick={() => { setRecovery(''); if (pending) onOpen(pending.dek, true); }}>כניסה לאפליקציה</button>
+            <button className="btn primary block" disabled={!saved} onClick={async () => {
+              setRecovery('');
+              if (!pending) return;
+              if (await shouldOfferBio(pending.meta)) { setMode('bio'); return; }
+              pending.raw.fill(0); onOpen(pending.dek, true);
+            }}>כניסה לאפליקציה</button>
           </div>
         )}
 

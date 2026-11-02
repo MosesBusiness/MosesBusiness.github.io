@@ -14,6 +14,7 @@ import { exportBackup, saveFile } from '../lib/backup';
 import { WEB } from '../lib/env';
 import { lastSyncAt, markSyncError, mirrored, onSyncStatus, parseRepo, reconcile, syncMessage, syncStatus, testRepo, uploadAll } from '../lib/github';
 import { guessCategory } from '../lib/merchants';
+import { bioAvailable, bioHere, declineBio, enrollBio, removeBioHere } from '../lib/bio';
 
 // ---------- onboarding / profile ----------
 export function OnboardSheet() {
@@ -644,7 +645,7 @@ export function SettingsSheet() {
             <select id="st-lock" className="input" style={{ width: 'auto', height: 38 }} value={s.lockMin} onChange={e => set({ lockMin: +e.target.value })}>
               {[0, 1, 3, 5, 15].map(m => <option key={m} value={m}>{m === 0 ? 'מיד' : `${m} דק׳`}</option>)}
             </select></label>
-          <button className="li" onClick={() => open({ k: 'security' })}><span className="glyph"><Icon name="key-round" /></span><span className="grow" style={{ display: 'grid' }}><span className="t">החלפת קוד וקוד שחזור</span><span className="s">AES-256-GCM · PBKDF2 עם 600,000 סבבים</span></span><Icon name="chevron-left" className="muted" /></button>
+          <button className="li" onClick={() => open({ k: 'security' })}><span className="glyph"><Icon name="key-round" /></span><span className="grow" style={{ display: 'grid' }}><span className="t">{WEB ? 'קוד, קוד שחזור וטביעת אצבע' : 'החלפת קוד וקוד שחזור'}</span><span className="s">AES-256-GCM · PBKDF2 עם 600,000 סבבים</span></span><Icon name="chevron-left" className="muted" /></button>
           <button className="li" onClick={lock}><span className="glyph"><Icon name="lock" /></span><span className="grow t">נעילה עכשיו</span></button>
           <div className="banner"><Icon name="shield-check" size={16} /><span>{io.backend.kind === 'cloud' ? 'הנתונים מוצפנים במכשיר לפני שהם נשמרים באזור הפרטי שלך בחשבון Claude. מי שרואה את הקובץ המאוחסן רואה רק תווים מוצפנים.' : v.core.sync?.on ? 'הנתונים מוצפנים בטלפון, ועותק מוצפן נשמר אוטומטית במאגר הפרטי שלך ב-GitHub. ניקוי הדפדפן לא מוחק אותם.' : 'הנתונים מוצפנים ונשמרים רק בטלפון הזה, לא בשום שרת. שמור גיבוי מוצפן פעם בחודש, ולמעבר לטלפון חדש: גיבוי כאן ושחזור שם.'}</span></div>
         </section>
@@ -684,6 +685,61 @@ export function SettingsSheet() {
   );
 }
 
+// Fingerprint / face quick unlock on this device. Turning it on needs the current code.
+function BioSection() {
+  const { io, toast } = useApp();
+  const [ok, setOk] = useState(false);
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    void bioAvailable().then(setOk);
+    void io.backend.getAll().then(d => setMeta((d.meta as Meta) || null));
+  }, [io]);
+  if (!ok || !meta) return null;
+  const on = bioHere(meta);
+  async function enable(e: React.FormEvent) {
+    e.preventDefault();
+    if (!meta) return;
+    setBusy(true); setErr('');
+    try {
+      const { raw } = await openWithPasscode(meta, code).catch(() => { throw new Error('code'); });
+      try {
+        const next = await enrollBio(meta, raw);
+        await io.saveMeta(next);
+        setMeta(next); setCode('');
+        toast('הכניסה המהירה פעילה');
+      } finally { raw.fill(0); }
+    } catch (x: any) {
+      setErr(x?.message === 'code' ? 'הקוד שגוי' : x?.code === 'cancel' ? '' : 'הטלפון הזה לא תומך בכניסה מהירה דרך הדפדפן.');
+    } finally { setBusy(false); }
+  }
+  async function disable() {
+    if (!meta) return;
+    const next = removeBioHere(meta);
+    declineBio();
+    await io.saveMeta(next);
+    setMeta(next);
+    toast('הכניסה המהירה כובתה');
+  }
+  return (
+    <div className="card flat tight stack" style={{ gap: 10 }}>
+      <div className="row"><span className="glyph gold"><Icon name="fingerprint" /></span>
+        <div className="grow" style={{ display: 'grid' }}><b>טביעת אצבע / זיהוי פנים</b><span className="muted" style={{ fontSize: '.8rem' }}>{on ? 'פעיל בטלפון הזה' : 'כניסה מהירה בלי להקליד קוד'}</span></div>
+        {on && <button className="btn quiet sm" onClick={() => void disable()}>כיבוי</button>}
+      </div>
+      {!on && (
+        <form className="row" style={{ alignItems: 'flex-end' }} onSubmit={enable}>
+          <label className="field grow"><span>הקוד הנוכחי</span><input id="bio-cur" className="input" type="password" autoComplete="current-password" value={code} onChange={e => setCode(e.target.value)} /></label>
+          <button className="btn primary" disabled={busy || code.length < 6}>{busy ? 'מגדיר…' : 'הפעלה'}</button>
+        </form>
+      )}
+      {err && <span className="down" role="alert" style={{ fontSize: '.84rem' }}>{err}</span>}
+    </div>
+  );
+}
+
 export function SecuritySheet() {
   const { io, close, toast } = useApp();
   const [cur, setCur] = useState('');
@@ -711,7 +767,7 @@ export function SecuritySheet() {
     } catch { setErr('הקוד הנוכחי שגוי'); } finally { setBusy(false); }
   }
   return (
-    <Sheet title="קוד וקוד שחזור" onClose={close} labelledBy="sc-h">
+    <Sheet title={WEB ? "כניסה וקודים" : "קוד וקוד שחזור"} onClose={close} labelledBy="sc-h">
       {rec ? (
         <div className="stack">
           <b>קוד השחזור החדש</b>
@@ -721,7 +777,10 @@ export function SecuritySheet() {
           <button className="btn primary" onClick={close}>שמרתי</button>
         </div>
       ) : (
+        <div className="stack">
+        <BioSection />
         <form className="stack" onSubmit={go}>
+          <b style={{ marginTop: 4 }}>החלפת קוד</b>
           <label className="field"><span>הקוד הנוכחי</span><input id="sc-cur" className="input" type="password" autoComplete="current-password" value={cur} onChange={e => setCur(e.target.value)} /></label>
           <label className="field"><span>קוד חדש (6 תווים לפחות)</span><input id="sc-n1" className="input" type="password" autoComplete="new-password" value={n1} onChange={e => setN1(e.target.value)} /></label>
           <label className="field"><span>שוב את הקוד החדש</span><input id="sc-n2" className="input" type="password" autoComplete="new-password" value={n2} onChange={e => setN2(e.target.value)} /></label>
@@ -729,6 +788,7 @@ export function SecuritySheet() {
           {err && <div className="down" role="alert">{err}</div>}
           <button className="btn primary" disabled={busy}>{busy ? 'מצפין…' : 'החלפה'}</button>
         </form>
+        </div>
       )}
     </Sheet>
   );

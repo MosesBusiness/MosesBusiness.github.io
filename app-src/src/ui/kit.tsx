@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { ICONS } from './iconData';
+import { useBack } from '../lib/back';
 
 export function Icon({ name, size = 20, stroke = 1.8, className, label }: { name: string; size?: number; stroke?: number; className?: string; label?: string }) {
   return (
@@ -12,17 +13,24 @@ export function Icon({ name, size = 20, stroke = 1.8, className, label }: { name
   );
 }
 
-export function Sheet({ title, onClose, children, full, footer, labelledBy }: {
+export function Sheet({ title, onClose, onBack, children, full, footer, labelledBy }: {
   title?: React.ReactNode; onClose: () => void; children: React.ReactNode; full?: boolean; footer?: React.ReactNode; labelledBy?: string;
+  /** A step back inside the sheet; return true when handled, otherwise the sheet closes. */
+  onBack?: () => boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Runs once per opening. Re-running on every render (onClose is often a new function)
+  // moved focus off the field being typed in and closed the phone keyboard after each letter.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current(); };
     window.addEventListener('keydown', onKey);
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.focus();
-    return () => { window.removeEventListener('keydown', onKey); prev?.focus?.(); };
-  }, [onClose]);
+    if (!ref.current?.contains(document.activeElement)) ref.current?.focus({ preventScroll: true });
+    return () => { window.removeEventListener('keydown', onKey); if (prev && document.contains(prev)) prev.focus?.({ preventScroll: true }); };
+  }, []);
+  useBack(() => { if (onBack?.()) return true; closeRef.current(); return true; });
   return (
     <>
       {!full && <div className="scrim" onClick={onClose} />}
